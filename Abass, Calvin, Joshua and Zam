@@ -1,0 +1,412 @@
+//Including all required libraries
+#include <M5Core2.h>
+#include <Arduino.h>
+#if defined(ESP32)
+/* After M5Core2 is started or reset
+  the program in the setUp () function will be run, and this part will only be run once.
+  在 M5Core2 启动或者复位后，即会开始执行setup()函数中的程序，该部分只会执行一次。 */
+      
+//WiFi libraries
+#include <WiFi.h>
+#elif defined(ESP8266)
+#include <ESP8266WiFi.h>
+#endif
+
+//Definition of sender IP address
+#include <ESP_Mail_Client.h>
+#define WiFi_SSID "A3.A603" 
+#define WiFi_Password "A3A60318"
+#define SMTP_Host "smtp.gmail.com" 
+#define SMTP_Port 475
+
+//Sign-in credentials
+#define Email_Author "m5stackcare@gmail.com"
+#define Author_Password "1112stackcare"
+
+//Recipient's email
+#define Recipient_Email "skillshare961@gmail.com"
+SMTPSession smtp;
+void smtpCallback(SMTP_Status status);
+
+//Button Colors Initialisation
+ButtonColors on_clrs = {GREEN, WHITE, WHITE};
+ButtonColors off_clrs = {BLUE, WHITE, WHITE};
+
+//Program constants
+Button notifications(0, 0, 0, 0, false, "Notifications", off_clrs, on_clrs, MC_DATUM);
+Button sleepReminder(0,0,0,0, false, "Sleep Reminder", off_clrs, on_clrs, MC_DATUM);
+Button falldetectmode(0,0,0,0, false, "Fall Detection", off_clrs, on_clrs, MC_DATUM);
+Button userManual(0, 0, 0, 0, false, "User Manual", off_clrs, on_clrs, MC_DATUM);
+
+//Initialised variables
+bool notificationsOpened = false;
+bool sleepReminderOpened = false;
+bool falldetectmodeflag = false;
+bool manualOpened = false;
+bool isTimeSet = false;
+bool checkTime = false;
+bool dailySleepLimitIsReached = false;
+bool newNotifications = false;
+bool clearNotifications = false;
+bool startedSetting = false;
+int hours=0;
+int minutes=0;
+int sleeptime(0);
+int hoursNextSleep = 0;
+int minutesNextSleep = 0;
+float total = 0;
+float avg = 1.1;
+boolean state = false;
+boolean old_state = false;
+bool mainMenuPrinted = false;
+//Initialising gyro sensors
+float accX = 0.0F;
+float accY = 0.0F;
+float accZ = 0.0F;
+float average_acc = 0.0F;
+int fallmins = 0;
+bool get_time = 0;
+bool check_time_fall = false;
+bool message_sent = false;
+bool not_safe = false;
+int hrsNextSleep(0);
+int minsNextSleep(0);
+String str = "<<<";
+bool getTime = false;
+double averageAcceleration(0);
+
+//For getting time and date 
+RTC_TimeTypeDef RTCtime;
+RTC_DateTypeDef RTCDate;
+
+//Text, color formatting & other functions
+void setup(){
+  //Sets program
+  M5.begin();  //Init M5Core.  初始化 M5Core2
+  M5.Axp.SetLDOEnable(3,false); //Disables vibration motor
+  M5.IMU.Init(); //For retrieving and initialising acceleration of device
+  WiFi.begin(WiFi_SSID, WiFi_Password); //allows connection to WiFi
+  printMainMenu(); //function call for printing main menu
+ // M5.Lcd.println("to clear screen.");
+}
+
+/* After the program in setup() runs, it runs the program in loop()
+The loop() function is an infinite loop in which the program runs repeatedly
+在setup()函数中的程序执行完后，会接着执行loop()函数中的程序
+loop()函数是一个死循环，其中的程序会不断的重复运行 */
+void loop() {
+  //Read the press state of the key.  读取按键 A, B, C 的状态
+  M5.update();  
+  M5.Rtc.GetTime(&RTCtime); //Constantly retrieving real time
+  if(sleepReminderOpened) //Sleep reminder option is opened
+  {
+    if(isTimeSet){ //user is notified of how much time they have left if time was already set
+      //color and text adjustments
+      M5.Lcd.setTextColor(BLACK,WHITE);
+      M5.Lcd.setCursor(70,20);
+      M5.Lcd.printf("Time left for sleeping: \n");
+      M5.Lcd.setCursor(50,140);
+      M5.Lcd.setTextSize(3);
+      
+      //Code for sleep reminder
+      if(RTCtime.Hours < hours){
+        int tmphrs = hours; //assigning hour value set by the user
+        hrsNextSleep = tmphrs - RTCtime.Hours; //time left for sleeping
+        int tmpmins;
+        
+        if(minutes==0){
+          tmpmins = 60;
+          if(hrsNextSleep==1){
+            hrsNextSleep = 0;
+          }
+        }
+        else
+        {
+          tmpmins = minutes;
+        }
+         minsNextSleep = tmpmins - RTCtime.Minutes;
+      }
+      else
+      {
+        hrsNextSleep = 24 - RTCtime.Hours + hours;
+        minsNextSleep = RTCtime.Minutes - minutes;
+      }
+    M5.Lcd.printf("%02d: ", hrsNextSleep);
+    M5.Lcd.printf("%02d: ", minsNextSleep);
+    M5.Lcd.setTextSize(1);
+    String ang_b = "<<<";
+    M5.Lcd.drawString(str,60,230,4);
+    if(M5.BtnA.isPressed()) //If the first button is pressed, main menu is displayed
+    {
+      printMainMenu();
+      sleepReminderOpened = false; //disables main menu output on screen
+    }    
+    }
+    else
+    {
+      if(!startedSetting){ //if timing was not set, displays 00:00 on output screen
+        M5.Lcd.setCursor(50,140);
+        M5.Lcd.setTextSize(4);
+        M5.Lcd.printf("00:00");
+      }
+
+      //Prompts user to configure timing
+      M5.Lcd.setTextSize(1);
+      M5.Lcd.setTextColor(BLACK,WHITE);
+      M5.Lcd.setCursor(90,20);
+      M5.Lcd.printf("Configure timing: \n");
+      String t_1 = "Hours";
+      M5.Lcd.drawString(str,50,230,4);
+      t_1 = "Minutes";
+      M5.Lcd.drawString(str,160,230,4);
+      t_1 = "Set";
+      M5.Lcd.drawString(str,265,230,4);
+      
+      //Configuring buttons for setting time
+      if(M5.BtnA.wasPressed()){ //Button A is used for setting hours
+        startedSetting = true;
+        hours++;
+        if (hours>23){
+          hours = 0;
+        }
+        M5.Lcd.clear();
+        M5.Lcd.fillRect(0,0,320,240,WHITE);
+        M5.Lcd.setTextColor(BLACK,WHITE);
+        M5.Lcd.setCursor(90,20);
+        M5.Lcd.printf("Configure timing: \n");
+        M5.Lcd.setCursor(50,140);
+        M5.Lcd.setTextSize(3);
+        M5.Lcd.printf("%02d : \n", hours);
+        M5.Lcd.printf("%02d : \n", minutes);
+        M5.Lcd.setTextSize(1);
+      }
+        
+      if(M5.BtnB.wasPressed()){ //Button B for setting minutes
+        startedSetting = true;
+        minutes++;
+        if(minutes>59){
+          minutes = 0;
+        }
+        M5.Lcd.clear();
+        M5.Lcd.fillRect(0,0,320,240,WHITE);
+        M5.Lcd.setTextColor(BLACK,WHITE);
+        M5.Lcd.setCursor(90,20);
+        M5.Lcd.printf("Configure timing: \n");
+        M5.Lcd.setCursor(50,140);
+        M5.Lcd.setTextSize(4);
+        M5.Lcd.printf("%02d : ", hours);
+        M5.Lcd.printf("%02d : ", minutes);
+        M5.Lcd.setTextSize(1);
+      }
+
+      if(M5.BtnC.wasPressed()) //Sets the time and exits to main menu
+      {
+      M5.Lcd.clear();
+      M5.Lcd.setCursor(0,0);
+      checkTime = true;
+      isTimeSet = true;
+      printMainMenu();
+      sleepReminderOpened = false;
+      startedSetting = false;
+      }
+      }
+    }
+
+    if(checkTime){ //When time passes, device vibrates for a minute
+      if(RTCtime.Hours==hours && RTCtime.Minutes==minutes){
+        M5.Axp.SetLDOEnable(3,true); //Activates vibration motor
+      }
+      if(RTCtime.Hours==hours && RTCtime.Minutes==minutes+1){
+        M5.Axp.SetLDOEnable(3,false);
+      }
+      }
+
+  M5.IMU.getAccelData(&accX, &accY, &accZ); //gets data from acceleration and assign them to variables
+  float acceleration = sqrt(accX*accX + accY*accY + accZ*accZ); //Net acceleration
+
+  M5.IMU.getAccelData(&accX,&accY,&accZ);
+  if(accZ>=1.4){
+    get_time = true;
+  }
+  if(get_time) //starts tracking time
+  {
+    M5.update();
+    RTC_TimeTypeDef RTCtime2;
+    M5.Rtc.GetTime(&RTCtime2);
+    fallmins = RTCtime2.Minutes;
+    getTime = false;
+    check_time_fall = true;
+  }
+ if(check_time_fall){
+   RTC_TimeTypeDef RTCtime2;
+   M5.Rtc.GetTime(&RTCtime2);
+   printfallsafetyscreen();
+   not_safe = true;
+
+   if(M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed()){
+     //Terminates fall detection protocol and aborts emergency email
+     not_safe = false;
+     check_time_fall = false;
+     printMainMenu();
+   }
+   if(RTCtime2.Minutes== fallmins + 1 && not_safe){
+     //Activates fall detection protocol and sends emergency email to parent
+     M5.IMU.getAccelData(&accX, &accY, &accZ);
+     averageAcceleration = sqrt(accX*accX + accY*accY + accZ*accZ);
+     if(averageAcceleration<2 && !message_sent){
+       smtp.debug(1);
+       //Declares session configuration data
+       ESP_Mail_Session session;
+       session.server.host_name = SMTP_Host;
+       session.server.port = SMTP_Port;
+       session.login.email = Email_Author;
+       session.login.password = Author_Password;
+       session.login.user_domain = "";
+
+       //Declares message attributes
+       SMTP_Message message;
+       message.sender.name = "ChildCare";
+       message.sender.email = Email_Author;
+       message.subject = "Potential fall detected";
+       message.addRecipient("Dear Customer", Recipient_Email);
+
+       //Message body
+       String TextMessage = "Your ward might have fallen. Please confirm your ward's safety";
+       message.text.content = TextMessage.c_str();
+       message.text.charSet = "us-ascii";
+       message.text.transfer_encoding = Content_Transfer_Encoding::enc_7bit;
+       message.priority = esp_mail_smtp_priority::esp_mail_smtp_priority_low;
+       message.response.notify = esp_mail_smtp_notify_success | esp_mail_smtp_notify_failure | esp_mail_smtp_notify_delay;
+
+       //Custom message header
+       message.addHeader("Message-ID: <joshuaclarke1111@gmail.com>");
+       if(!smtp.connect(&session))
+       return;
+      
+      //Sends mail to subscriber and ends session
+       MailClient.sendMail(&smtp, &message);
+       message_sent = true;
+     }
+   }
+ }
+}
+
+void sleepbtntap(Event& e)
+//Function for sleeping mode
+{
+sleepReminderOpened = true;
+M5.Lcd.clear();
+M5.Lcd.fillRect(0,0,320,240,WHITE);
+M5.Lcd.setTextColor(BLACK,WHITE);
+}
+
+//Possible function
+
+void notificationsbtntap(Event& e)
+{
+//Function for notifying user's sleep info
+notificationsOpened = true;
+ButtonColors on_clrs = {GREEN, WHITE, WHITE};
+ButtonColors off_clrs = {BLUE, WHITE, WHITE};
+M5.Lcd.clear();
+M5.Lcd.fillRect(0,0,320,240,WHITE);
+M5.Lcd.setTextColor(BLACK,WHITE);
+
+  if(dailySleepLimitIsReached)
+{
+M5.Lcd.clear();
+M5.Lcd.fillRect(0,0,320,240,WHITE);
+M5.Lcd.setTextColor(BLACK,WHITE);
+M5.Lcd.setCursor(0,20);
+M5.Lcd.setTextSize(1);
+M5.Lcd.printf("Great! Your child reached the max-imum sleep goal set! Your child slept for %01d hours\n", sleeptime); //Prints info about child's sleep duration
+M5.Lcd.setTextSize(1);
+String ang_b = "<<<";
+M5.Lcd.drawString(str,60,230,4);
+}
+
+  else{
+  M5.Lcd.clear();
+  M5.Lcd.fillRect(0,0,320,240,WHITE);
+  M5.Lcd.setTextColor(BLACK,WHITE);
+  M5.Lcd.setCursor(0,20);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.printf("Snap! Your child did not reach the max-imum sleep goal set! Your child slept for %01d hours\n", sleeptime); //Prints info on child's sleep duration
+
+  M5.Lcd.drawString(str,60,230,4);
+}
+}
+
+usermanualbtntap(Event& e)
+//Function displays User Manual
+{
+  manualOpened=true;
+  ButtonColors on_clrs = {RED,GREEN, GREEN};
+  ButtonColors off_clrs = {BLUE, WHITE, WHITE};
+  M5.Lcd.clear();
+  M5.Lcd.fillRect(0,0,320,240, WHITE);
+  M5.Lcd.setTextColor(BLACK,WHITE);
+  M5.Lcd.setCursor(0,20);
+  M5.Lcd.setTextSize(1);
+
+//Prints menu options to screen
+  M5.Lcd.printf("Sleep Reminder: Configure timing using\n");
+  M5.Lcd.printf("'Hour' and 'Minute' buttons\n");
+  M5.Lcd.printf("Confirm time configuration with 'Set' button \n");
+  M5.Lcd.printf("Notifications: View number of unread messages\n");
+  M5.Lcd.printf("Fall Detection: Should a fall be detected, an email will be sent to the given address\n");
+  String ang_b = "<<<";
+  M5.Lcd.drawString(str,60,230,4);
+}
+
+void printmainmenu()
+//Function for printing menu
+{
+  mainMenuPrinted = true;
+  M5.Lcd.clearDisplay();
+  M5.Lcd.fillScreen(WHITE);
+  int16_t hw = M5.Lcd.width()/2;
+  int16_t hh = M5.Lcd.height()/2;
+
+//Setting menu configurations
+  sleepReminder.set(0,0,hw-5,hh-5);
+  falldetectmode.set(0,hh+5,hw-5,hh-5);
+  notifications.set(hw+5,0,hw-5,hh-5);
+ 
+if(newNotifications && !clearNotifications){
+  notifications.off.bg = RED;
+}
+else{
+  notifications.off.bg = BLUE;
+}
+
+userManual.set(hw+5,hh+5,hw-5,hh-5);
+//Functions for LCD-buttons
+sleepReminder.addHandler(sleepBtnTap, E_TAP);
+falldetectmode.addHandler(fallBtnTap, E_TAP);
+notifications.addHandler(notificationsBtnTap, E_TAP);
+userManual.addHandler(manualBtnTap, E_TAP);
+M5.Buttons.draw();
+}
+
+void fallbtntap(Event& e){
+  falldetectmodeflag = true;
+  M5.Lcd.clear();
+  M5.Lcd.setTextColor(BLACK, WHITE);
+  M5.Lcd.setCursor(0,20);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.printf("Fall detect mode is currently in session\n");
+  printMainMenu();
+}
+
+
+void printfallsafetyscreen() //Function for displaying safety message
+{
+  M5.Lcd.fillRect(0,0,320,240, WHITE);
+  M5.Lcd.setTextColor(BLACK, WHITE);
+  M5.Lcd.setCursor(0,20);
+  M5.Lcd.setTextSize(1);
+  //Message printed when fall is  detected
+  M5.Lcd.printf("Fall has been detected. Press any button to confirm your safety");
+  delay(5000);
+}
